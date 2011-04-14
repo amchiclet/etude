@@ -1,0 +1,824 @@
+number_of_tracks = 1
+ticks_per_beat = 4
+beats_per_second = 80
+
+heap = []
+midi_file = []
+
+//[instrument name, program number, on/off
+instrument_list = [["piano", 0, 0], 
+                   ["xylophone", 13, 0],
+                   ["aguitar", 24, 0],
+                   ["eguitar", 29, 0],
+                   ["harp", 46, 0],
+                   ["drums", 0, 0],
+                   ["lead", 81, 0]
+                  ]
+
+do_math = function(math_tree, what, octave_size)
+{
+
+   var ret = []
+   if (math_tree.length == 1)
+   {
+      ret = math_tree
+   }
+   else if (math_tree[0] == "?")
+   {
+      ret = get_var_from_heap(math_tree[1])[1][1][what]
+   }
+   else if (math_tree[0] == "+" || math_tree[0] == "-" || math_tree[0] == "*" || math_tree[0] == "/")
+   {
+      var i
+      var num
+      var num_list
+
+      var left = do_math(math_tree[1], what, octave_size)
+      var right = do_math(math_tree[2], what, octave_size)
+
+      if (right.length == 1)
+      {
+         num_list = left
+         num = right[0]
+      }
+      else if (left.length == 1)
+      {
+         num = left[0]
+         num_list = right
+      }
+      else
+      {
+         //we shouldn't be doing this
+      }
+
+      for (i = 0; i < num_list.length; i++)
+      {
+         if (math_tree[0] == "+")
+         {
+            if (num_list == right)
+            {
+               if (num == 0)
+                  ret = ret.concat(0)
+               else if (num < 0 && num + num_list[i] >= 0)
+                  ret = ret.concat(num + num_list[i] + 1)
+               else
+                  ret = ret.concat(num + num_list[i])               
+            }
+            else
+               ret = ret.concat(num_list[i] + num)
+         }
+         else if (math_tree[0] == "*")
+         {
+            ret = ret.concat(num_list[i] * num)
+         }
+         else if (math_tree[0] == "-")
+         {
+            var result
+            if (num_list == right)
+            {
+               if (num == 0)
+                  ret = ret.concat(0)
+               else if (num > 0 && num - num_list[i] <= 0)
+                  ret = ret.concat(num - num_list[i] - 1)
+               else
+                  ret = ret.concat(num - num_list[i])
+            }
+            else
+            {
+               if (num_list[i] == 0)
+                  ret = ret.concat(0)
+               else if (num_list[i] > 0 && num_list[i] - num <= 0)
+                  ret = ret.concat(num_list[i] - num - 1)
+               else
+                  ret = ret.concat(num_list[i] - num)
+            }
+         }
+         else if (math_tree[0] == "/")
+         {
+            if (num_list == right)
+               ret = ret.concat((num - (num % num_list[i])) / num_list[i])
+            else
+               ret = ret.concat((num_list[i] - (num_list[i] % num)) / num)
+         }
+      }
+   }
+   else if (math_tree[0] == "^" || math_tree[0] == "v")
+   {
+      var i
+      for (i = 1; i < math_tree.length; i++)
+      {
+         var temp = do_math(math_tree[i], what, octave_size)
+         var j
+         for (j = 0; j < temp.length; j++)
+         {
+            if (math_tree[0] == "^")
+            {
+               if (temp[j] == 0)
+                  ret = ret.concat(0)
+               else if (temp[j] < 0 && temp[j] + octave_size >= 0)
+                  ret = ret.concat(temp[j] + octave_size + 1)
+               else
+                  ret = ret.concat(temp[j] + octave_size)
+            }
+            else
+            {
+               if (temp[j] == 0)
+                  ret = ret.concat(0)
+               else if (temp[j] > 0 && temp[j] - octave_size <= 0)
+                  ret = ret.concat(temp[j] - octave_size -1)
+               else
+                  ret = ret.concat(temp[j] - octave_size)
+            }
+         }
+      }
+   }
+ 
+   return ret
+
+}
+
+
+
+//melody part is one of the following
+// 0 -> tune
+// 1 -> timing
+// 2 -> scale
+// 3 -> position
+// melody = ["!", [...]]
+// melody_part = [[1], [2], [3], ['+', [4], ['?', 'x']]]
+expand_variable_part = function(melody, what, octave_size)
+{
+   var ret = []
+   var i
+
+   var melody_part = melody[1][what]
+
+   //melody_part = [[1], [2], [3], ["+", 5, "x"]]
+   for (i = 0; i < melody_part.length; i++)
+   {  
+      if (melody_part[i].length == 1)
+      {        
+         ret = ret.concat(melody_part[i][0])
+      }
+      else
+      {  
+         ret = ret.concat(do_math(melody_part[i], what, octave_size))
+      }
+   }
+
+   return ret
+}
+
+//expands something like 
+//["&", ["?", "x"], ["!", [tune, timing, scale, position] ]
+expand_variables_whole = function(melody)
+{
+   var ret = []
+ 
+   //we know what we are dealing with by looking at melody[0]
+
+   //melody literals
+   if (melody[0] == "!")
+   {
+      var scale = expand_variable_part(melody, 2)
+      var octave_size = scale.length - 1
+      ret = ["!", 
+              [  expand_variable_part(melody, 0, octave_size),
+                 expand_variable_part(melody, 1, octave_size),
+                 expand_variable_part(melody, 2, octave_size),
+                 expand_variable_part(melody, 3, octave_size)
+              ]
+            ]
+   }
+
+   //variables
+   else if (melody[0] == "?")
+   {
+      ret = get_var_from_heap(melody[1])[1] 
+   }
+
+   //melody transformation
+   else
+   {
+      ret = [melody[0], expand_variables_whole(melody[1]), expand_variables_whole(melody[2])]      
+   }
+
+   return ret
+}
+
+get_var_from_heap = function(variable_name)
+{
+   var get_var_from_heap_ret = []
+
+   for (i = 0; i < heap.length; i++)
+      if (heap[i][0] == variable_name)
+      {   get_var_from_heap_ret = heap[i]
+          break
+      }
+
+   return get_var_from_heap_ret
+}
+
+
+
+add_var_to_heap = function(arg)
+{
+   //the final thing to add to the heap
+   var result = []
+
+   //the variable name
+   result = result.concat(arg[0])
+   result = result.concat([expand_variables_whole(arg[1])])
+
+   heap = heap.concat([result])
+}
+
+num2ff = function(num)
+{
+   first_loop = true
+   num2ff_ret = [0]
+
+   while (num > 0)
+   {
+      remainder = num % 256
+      num = num - remainder
+      num = num/256
+
+      if (first_loop)
+      {
+         num2ff_ret = [remainder]
+         first_loop = false
+      }
+      else
+      {
+         num2ff_ret = [remainder].concat(num2ff_ret)
+      }
+   }
+
+   return num2ff_ret
+}
+
+num2vlen = function(num)
+{
+   first_loop = true
+   num2vlen_ret = [0]
+
+   while (num > 0)
+   {
+      remainder = num % 128
+      num = num - remainder
+      num = num/128
+
+      if (first_loop)
+      {
+         num2vlen_ret = [remainder]
+         first_loop = false
+      }
+      else
+      {
+         num2vlen_ret = [remainder+128].concat(num2vlen_ret)
+      }
+   }
+
+   return num2vlen_ret
+}
+
+track_header = function(size_of_track)
+{
+   //MTrk
+   track_header_ret = [77, 84, 114, 107]
+   //size of track
+   ff_size_of_track = num2ff(size_of_track)
+   while (ff_size_of_track.length < 4)
+      ff_size_of_track = [0].concat(ff_size_of_track)
+   track_header_ret = track_header_ret.concat(ff_size_of_track)
+   return track_header_ret
+}
+
+bpm2ff = function(bpm)
+{
+   return num2ff((60000000 - (60000000 % bpm))/bpm)
+}
+
+file_header = function()
+{
+   //MThd
+   file_header_ret = [77, 84, 104, 100]
+   //size
+   file_header_ret = file_header_ret.concat([0, 0, 0, 6])
+   //file format
+   file_header_ret = file_header_ret.concat([0, 1])
+   //number of tracks
+   //should be less than 256
+   file_header_ret = file_header_ret.concat([0, number_of_tracks])
+   //time unit
+   fftpb = num2ff(ticks_per_beat)
+   if (fftpb.length < 2)
+     fftpb = [0].concat(fftpb)
+   file_header_ret = file_header_ret.concat(fftpb)
+
+   //track 0 for meta info
+   //the size of this track is 17
+   file_header_ret = file_header_ret.concat(track_header(17))
+
+   //key signature 0 flats/sharps and major
+   file_header_ret = file_header_ret.concat([0, 255, 89, 2, 0, 0])
+
+   //tempo setting 
+   file_header_ret = file_header_ret.concat([0, 255, 81, 3])
+   fftempo = bpm2ff(beats_per_second)
+   while (fftempo.length < 3)
+      fftempo = [0].concat(fftempo)
+   file_header_ret = file_header_ret.concat(fftempo)
+
+   //end of track
+   file_header_ret = file_header_ret.concat(end_of_track())
+   return file_header_ret
+}
+
+note_on = function(vlength_time, ffnote, channel)
+{
+   return vlength_time.concat([144+channel, ffnote, 127])
+}
+
+note_off = function(vlength_time, ffnote, channel)
+{
+   return vlength_time.concat([128+channel, ffnote, 0])
+}
+
+end_of_track = function()
+{
+   return [0, 255, 47, 0]
+}
+
+program_change = function(channel, instrument)
+{
+   return [0, 192+channel, instrument]
+}
+
+note2ff = function(note, scale, position)
+{
+   var ret
+   if (note == 0)
+      ret = -1
+   else if (note < 0)
+   {
+      var positive = 0 - note
+      var scale_width = scale.length - 1
+      var scale_height = scale[scale_width] - scale[0]
+      var remainder = positive % scale_width
+      var octave_count = (positive - remainder)/scale_width + 1
+      if (remainder == 0)
+         ret = position - (octave_count - 1) * scale_height + scale[0] - 1
+      else
+         ret = position - octave_count * scale_height + scale[scale_width - remainder] - 1
+   }
+   else
+   {
+      var scale_width = scale.length - 1
+      var scale_height = scale[scale_width] - scale[0]
+      var remainder = (note - 1) % scale_width
+      var octave_count = (note - 1 - remainder)/scale_width
+      ret = position + octave_count * scale_height + scale[remainder] - 1
+   }
+
+   return ret
+}
+
+//expecting ir to be [note_on_ir, note_off_ir]
+ir2midi = function(ir, channel)
+{
+   //similar to merge sort
+   i_on = 0
+   i_off = 0
+   note_on_ir = ir[0]
+   note_off_ir = ir[1]
+   current_time = 0   
+   ir2midi_ret = []
+
+   while (i_on < note_on_ir.length || i_off < note_off_ir.length)
+   {
+
+      //if one of the indices reach its limit, do the other
+      if (i_on == note_on_ir.length)
+      {
+         delta = note_off_ir[i_off][0]-current_time
+         ir2midi_ret = ir2midi_ret.concat(note_off(num2vlen(delta), note_off_ir[i_off][1], channel))
+         i_off++
+         current_time += delta
+         continue
+      }
+      if (i_off == note_off_ir.length)
+      {
+         delta = note_on_ir[i_on][0]-current_time
+         ir2midi_ret = ir2midi_ret.concat(note_on(num2vlen(delta), note_on_ir[i_on][1], channel))
+         i_on++
+         current_time += delta
+         continue
+      }
+      
+      //compare their elapsed time
+      if (note_on_ir[i_on][0] < note_off_ir[i_off][0])
+      {
+         delta = note_on_ir[i_on][0]-current_time
+         ir2midi_ret = ir2midi_ret.concat(note_on(num2vlen(delta), note_on_ir[i_on][1], channel))
+         i_on++
+         current_time += delta
+      }
+      else 
+      {
+         delta = note_off_ir[i_off][0] - current_time
+         ir2midi_ret = ir2midi_ret.concat(note_off(num2vlen(delta), note_off_ir[i_off][1], channel))
+         i_off++ 
+         current_time += delta
+      }
+   }
+
+  return ir2midi_ret
+}
+
+write2file = function(input)
+{
+   midi_file = midi_file.concat(input)
+}
+
+create_binary = function()
+{  
+   var raw_data
+   eval("""
+   uuencode64 = function(bytes) {
+     var keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+     var output = ""
+     var b1, b2, b3
+     var e1, e2, e3, e4
+     var i = 0
+     while (i < bytes.length) {
+       b1 = bytes[i++]
+       b2 = bytes[i++]
+       b3 = bytes[i++]
+       e1 = b1 >> 2
+       e2 = ((b1 &  3) << 4) | (b2 >> 4)
+       e3 = ((b2 & 15) << 2) | (b3 >> 6)
+       e4 = b3 & 63
+       if      (isNaN(b2)) { e3 = e4 = 64 }
+       else if (isNaN(b3)) { e4 = 64      }
+       output += keyStr.charAt(e1) + keyStr.charAt(e2) + keyStr.charAt(e3) + keyStr.charAt(e4)
+     }
+     return output
+   }
+
+   raw_data  = uuencode64(midi_file)
+   """)
+
+   midi = document.createElement("embed")
+   midi.setAttribute('src', 'data:audio/midi;base64,' + raw_data)
+   $('playArea').appendChild(midi)
+}
+
+
+// melody =  [!, [[1, 2, 9], [24, 24, 24], [1, 3, 5, 6, 8, 10, 12], [48]]]]
+melody2ir = function(melody, end_of_melody)
+{
+   var note_on_ir = []
+   var note_off_ir = []
+   var ret_end_of_melody = 0
+   if (melody[0] == "!")
+   {
+      var i
+      var elapsed = 0
+      var tune = melody[1][0]
+      var timing = melody[1][1]
+      var scale = melody[1][2]
+      var position = melody[1][3]
+      for (i = 0; i < tune.length; i++)
+      {  
+
+         var note_ff = note2ff(tune[i], scale, position[0])
+         if (note_ff != -1)
+            note_on_ir = note_on_ir.concat([[elapsed, note_ff]])
+         elapsed += timing[i]
+         if (note_ff != -1)
+            note_off_ir = note_off_ir.concat([[elapsed, note_ff]])
+      }
+      ret_end_of_melody = elapsed
+   }
+   else if (melody[0] == "&")
+   {
+      var left = melody2ir(melody[1])
+      var right = melody2ir(melody[2])
+
+      var i = 0
+      var j = 0
+
+      //merge the note on part
+      while (i < left[0].length || j < right[0].length)
+      {
+         if (i == left[0].length)
+         {
+            note_on_ir = note_on_ir.concat([right[0][j]])
+            j++
+            continue
+         }
+         if (j == right[0].length)
+         {
+            note_on_ir = note_on_ir.concat([left[0][i]])
+            i++
+            continue
+         }
+
+         if (left[0][i][0] < right[0][j][0])
+         {
+            note_on_ir = note_on_ir.concat([left[0][i]])
+            i++
+         }
+         else
+         {
+            note_on_ir = note_on_ir.concat([right[0][j]])
+            j++
+         }            
+      }
+
+      //merge the note off part
+      i = 0
+      j = 0
+      while (i < left[1].length || j < right[1].length)
+      {
+         if (i == left[1].length)
+         {
+            note_off_ir = note_off_ir.concat([right[1][j]])
+            j++
+            continue
+         }
+         if (j == right[1].length)
+         {
+            note_off_ir = note_off_ir.concat([left[1][i]])
+            i++
+            continue
+         }
+
+         if (left[1][i][0] < right[1][j][0])
+         {
+            note_off_ir = note_off_ir.concat([left[1][i]])
+            i++
+         }
+         else
+         {
+            note_off_ir = note_off_ir.concat([right[1][j]])
+            j++
+         }            
+      }
+
+      ret_end_of_melody = note_off_ir[note_off_ir.length-1][0]
+   }
+
+   else if (melody[0] == ".")
+   {
+      var left = melody2ir(melody[1])
+      var right = melody2ir(melody[2])
+      end_of_left = left[2]
+
+      var i = 0
+      var j = 0
+
+      //the left part is easy
+      for (i = 0; i < left[0].length; i++)
+      { 
+         note_on_ir = note_on_ir.concat([left[0][i]])
+         note_off_ir = note_off_ir.concat([left[1][i]])
+      }
+
+
+      //the right part
+      //the end of the left part
+      // left [[a,b,c,d],[a,b,c,d]]
+      // d [elapsed time, melody]
+      for (i = 0; i < right[0].length; i++)
+      { 
+         note_on_ir = note_on_ir.concat([[end_of_left + right[0][i][0], right[0][i][1]]])
+         note_off_ir = note_off_ir.concat([[end_of_left + right[1][i][0], right[1][i][1]]])
+      }
+
+      ret_end_of_melody = note_off_ir[note_off_ir.length-1][0]
+   }   
+   return [note_on_ir, note_off_ir, ret_end_of_melody]
+}
+
+reset_program_state = function()
+{
+   var i
+   for (i = 0; i < instrument_list.length; i++)
+      instrument_list[i][2] = 0
+   midi_file = []
+   heap = []
+   number_of_tracks = 1
+}
+
+get_instrument = function(name)
+{
+   var ret = []
+   var i 
+   for (i = 0; i < instrument_list.length; i++)
+   {
+      if (instrument_list[i][0] == name)
+      {
+         ret = instrument_list[i]
+         break
+      }  
+   }
+   return ret
+}
+
+
+set_instrument = function(name)
+{
+   var i 
+   for (i = 0; i < instrument_list.length; i++)
+   {
+      if (instrument_list[i][0] == name)
+      {
+         instrument_list[i][2] = 1
+         break
+      }  
+   }
+}
+
+ometa A <: Parser {
+   //numbers and words
+
+   d = digit,
+   n = d:x n:y -> (x+y)
+     | d,
+
+   a = letter,
+   w = a:x w:y -> (x+y)
+     | a,
+
+   space = ~'\n' super('space'),
+   variable = spaces w:x 
+              ? (x != 'v') -> ['?', x],
+   literal = spaces n:x -> [parseInt(x)],
+
+   //number lists
+   nlist = listOf('literal', ''),
+
+   //tune
+   element = literal
+                | variable,
+
+   //for tunes, we have the extra ^ and v operations
+   tune_op      = "(" tune_op_add:x ")" -> x
+                | "^" tune_expr_list:x    -> ['^'].concat(x)
+                | "v" tune_expr_list:x    -> ['v'].concat(x)
+                | element:x        -> x,
+
+   tune_op_mul  = tune_op_mul:x "*" tune_op:y -> ['*'].concat([x]).concat([y])
+                | tune_op_mul:x "/" tune_op:y -> ['/'].concat([x]).concat([y])
+                | tune_op,
+
+   tune_op_add  = tune_op_add:x "+" tune_op_mul:y -> ['+'].concat([x]).concat([y])
+                | tune_op_add:x "-" tune_op_mul:y -> ['-'].concat([x]).concat([y])
+                | tune_op_mul,
+
+   tune_expr = tune_op_add,
+   tune_expr_list = listOf('tune_expr', ''),
+
+   //for other parts of the melody, it's just math
+   op      = "(" op_add:x ")" -> x
+           | element:x        -> x,
+
+   op_mul  = op_mul:x "*" op:y -> ['*'].concat([x]).concat([y])
+           | op_mul:x "/" op:y -> ['/'].concat([x]).concat([y])
+           | op,
+
+   op_add  = op_add:x "+" op_mul:y -> ['+'].concat([x]).concat([y])
+           | op_add:x "-" op_mul:y -> ['-'].concat([x]).concat([y])
+           | op_mul,
+
+   expr = op_add,
+   expr_list = listOf('expr', ''),
+
+   tune     = "\"" tune_expr_list:x "\"" -> x,
+   timing   = ":" expr_list:x ":"        -> x,
+   scale    = "$" expr_list:x "$"        -> x,
+   position = "@" expr_list:x   
+              ? (x.length == 1)          -> x,
+
+   melody_literal  = tune:x1 "\n" 
+                     timing:x2 "\n" 
+                     scale:x3 "\n" 
+                     position:x4 -> ['!', [x1, x2, x3, x4]],
+
+   melody_variable = variable,
+
+   tune_optional = ("\n" tune | empty -> [[]]),
+
+   timing_optional = ("\n" timing | empty -> [[]]),
+
+   scale_optional = ("\n" scale | empty -> [[]]),
+
+   position_optional = ("\n" position| empty -> [[]]),
+
+   melody_extend = variable:x1 "except"
+                   tune_optional:x2
+                   timing_optional:x3
+                   scale_optional:x4
+                   position_optional:x5
+                   -> {                         var tune
+                         var timing
+                         var scale
+                         var position
+
+                         if (x2[0].length > 0)
+                            tune = x2
+                         else
+                            tune = [x1]
+
+                         if (x3[0].length > 0)
+                            timing = x3
+                         else
+                            timing = [x1]
+
+                         if (x4[0].length > 0)
+                            scale = x4
+                         else
+                            scale = [x1]
+
+                         if (x5[0].length > 0)
+                            position = x5
+                         else
+                            position = [x1]
+
+                         ['!', [tune, timing, scale, position]]
+
+                      },
+
+   melody_element = melody_literal
+                  | melody_extend
+                  | melody_variable,
+
+   optional_newlines = "\n"*,
+
+   melody_op        = "(" melody_op_concat:x ")"             -> x
+                    | melody_element,
+   melody_op_and    = melody_op_and:x optional_newlines "&" optional_newlines melody_op:y        -> ['&', x, y]
+                    | melody_op,
+   melody_op_concat = melody_op_concat:x optional_newlines "." optional_newlines melody_op_and:y -> ['.', x, y]
+                    | melody_op_and,
+
+   melody_expr = melody_op_concat,
+
+   //definitions
+   definition = variable:x "=" optional_newlines melody_expr:y 
+                ? (get_instrument(x[1]).length > 0 && get_instrument(x[1])[2] == 0)  -> {
+                                                           number_of_tracks++
+                                                           set_instrument(x[1])
+                                                           add_var_to_heap([x[1]].concat([y]))
+                                                        }
+              | variable:x "=" optional_newlines melody_expr:y
+                ? (get_instrument(x[1]).length == 0) -> add_var_to_heap([x[1]].concat([y])),
+
+   at_least_one_newline = "\n"+,
+   definitions = definition at_least_one_newline definitions
+               | definition,
+
+   program = optional_newlines definitions optional_newlines -> 
+             {
+                write2file(file_header())
+                var i
+                var channel = 0
+                for (i = 0; i < instrument_list.length; i++)
+                {
+                   if (instrument_list[i][2] == 1)
+                   {
+                      var heap_melody = get_var_from_heap(instrument_list[i][0])  
+                      ir = melody2ir(heap_melody[1], 0)   
+
+                      var midi_events = []
+
+                      var final_channel = channel
+                      if (instrument_list[i][0] == "drums")
+                         final_channel = 9
+
+                      midi_events = midi_events.concat(program_change(final_channel, instrument_list[i][1]))
+                      midi_events = midi_events.concat(ir2midi(ir,final_channel)) 
+                      midi_events = midi_events.concat(end_of_track())
+
+                      write2file(track_header(midi_events.length))
+                      write2file(midi_events)                    
+
+                      if (final_channel != 9)
+                         channel++
+
+                      if (channel == 9)
+                         channel++
+                   }
+                }
+                create_binary()
+             }
+}
+
+compile = function(source_code)
+{
+   reset_program_state()
+   A.matchAll(source_code, 'program')
+}
